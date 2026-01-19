@@ -6,6 +6,7 @@ adversarial prompts for testing language model safety measures.
 from __future__ import annotations
 
 import argparse
+import yaml
 import copy
 import importlib
 import itertools
@@ -54,36 +55,51 @@ run = None
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Argument parser for red team experiment")
-    print(argv)
-    parser.add_argument("--benchmark", type=str, default="harmbench", choices=["harmbench", "advbench", "wildguard"])
-    parser.add_argument("--mode", type=str, default="search", choices=["search", "evaluate"], help="Run mode: search or evaluate")
-    parser.add_argument("--valid_size", type=int, default=128, help="Validation set size")
-    parser.add_argument("--test_size", type=int, default=800, help="Test set size")
-    parser.add_argument("--shuffle_seed", type=int, default=1, help="Seed for shuffling the data")
-    parser.add_argument("--n_repeat", type=int, default=3, help="Number of repetitions")
-    parser.add_argument("--multiprocessing", action='store_true', default=True,
+    parser.add_argument("--config", type=str, default=None, help="Path to config.yaml file")
+    parser.add_argument("--benchmark", type=str, default=None, choices=["harmbench", "advbench", "wildguard"])
+    parser.add_argument("--mode", type=str, default=None, choices=["search", "evaluate"], help="Run mode: search or evaluate")
+    parser.add_argument("--valid_size", type=int, default=None, help="Validation set size")
+    parser.add_argument("--test_size", type=int, default=None, help="Test set size")
+    parser.add_argument("--shuffle_seed", type=int, default=None, help="Seed for shuffling the data")
+    parser.add_argument("--n_repeat", type=int, default=None, help="Number of repetitions")
+    parser.add_argument("--multiprocessing", action='store_true', default=None,
                         help="Use multiprocessing (default: True)")
-    parser.add_argument("--max_workers", type=int, default=1, help="Maximum number of workers")
-    parser.add_argument("--debug", action='store_true', default=False, help="Enable debug mode")
-    parser.add_argument("--use_history", action='store_true', default=False, help="Use history")
-    parser.add_argument("--save_dir", type=str, default="./results/", help="Directory to save results")
-    parser.add_argument("--expr_name", type=str, default='redteam_[META_AGENT]_[ATTACKER]_[DEFENDER]_[SEED]', help="Name of the experiment")
-    parser.add_argument("--n_generation", type=int, default=20, help="Number of generations")
-    parser.add_argument("--debug_max", type=int, default=5, help="Maximum number of debug samples")
-    parser.add_argument("--meta_agent_model", type=str, default="gpt-3.5-turbo",
+    parser.add_argument("--max_workers", type=int, default=None, help="Maximum number of workers")
+    parser.add_argument("--debug", action='store_true', default=None, help="Enable debug mode")
+    parser.add_argument("--use_history", action='store_true', default=None, help="Use history")
+    parser.add_argument("--save_dir", type=str, default=None, help="Directory to save results")
+    parser.add_argument("--expr_name", type=str, default=None, help="Name of the experiment")
+    parser.add_argument("--n_generation", type=int, default=None, help="Number of generations")
+    parser.add_argument("--debug_max", type=int, default=None, help="Maximum number of debug samples")
+    parser.add_argument("--meta_agent_model", type=str, default=None,
                         help="Meta agent model (e.g., gpt-3.5-turbo, gpt-4o)")
-    parser.add_argument("--attacker_model", type=str, required=True, help="Endpoint of the attacker model")
-    parser.add_argument("--defender_model", type=str, required=True, help="Endpoint of the defender model")
-    parser.add_argument("--evaluator_model", type=str, default="gpt-4o", help="Endpoint of the evaluator model, comma-separated if multiple")
-    parser.add_argument("--classifier_model", type=str, required=True, help="Endpoint of the classifier model")
+    parser.add_argument("--attacker_model", type=str, default=None, help="Endpoint of the attacker model")
+    parser.add_argument("--defender_model", type=str, default=None, help="Endpoint of the defender model")
+    parser.add_argument("--evaluator_model", type=str, default=None, help="Endpoint of the evaluator model, comma-separated if multiple")
+    parser.add_argument("--classifier_model", type=str, default=None, help="Endpoint of the classifier model")
     parser.add_argument("--wandb", type=str, required=False, default=None, help="If specified, resume the wandb run")
-    parser.add_argument("--num_offspring_per_gen", type=int, default=3, help="Number of offsprings produced per generation")
-    parser.add_argument("--remove_least_fit", default=True, action='store_true', help="Remove the least fit solution from archive")
-    parser.add_argument("--weak_init_archive", default=False, action='store_true', help="Having a weak initial archive")
-    parser.add_argument("--diversity_incentive", default=False, action='store_true', help="Having a diversity incentive in fitness")
-    parser.add_argument("--diversity_threshold", type=float, default=1.0, help="Diversity threshold for self-BLEU score")
+    parser.add_argument("--num_offspring_per_gen", type=int, default=None, help="Number of offsprings produced per generation")
+    parser.add_argument("--remove_least_fit", action='store_true', default=None, help="Remove the least fit solution from archive")
+    parser.add_argument("--weak_init_archive", action='store_true', default=None, help="Having a weak initial archive")
+    parser.add_argument("--diversity_incentive", action='store_true', default=None, help="Having a diversity incentive in fitness")
+    parser.add_argument("--diversity_threshold", type=float, default=None, help="Diversity threshold for self-BLEU score")
 
-    return parser.parse_args(argv)
+    # Parse known args first to get config path
+    args, unknown = parser.parse_known_args(argv)
+    config = {}
+    if args.config:
+        with open(args.config, 'r') as f:
+            config = yaml.safe_load(f)
+    # Set defaults from config if not set by CLI
+    for key, value in config.items():
+        if hasattr(args, key) and getattr(args, key) is None:
+            setattr(args, key, value)
+    # Required fields check
+    required = ["attacker_model", "defender_model", "classifier_model"]
+    for r in required:
+        if getattr(args, r, None) is None:
+            parser.error(f"--{r} is required (either in CLI or config file)")
+    return args
 
 
 Info = namedtuple('Info', ['name', 'author', 'content', 'target', 'iteration_idx'])
@@ -595,7 +611,6 @@ def evaluate(args):
         archive = json.load(json_file)
     eval_archive = archive
 
-    print("archive len", len(archive))
     for current_idx in range(len(eval_archive)):
         solution = eval_archive[current_idx]
         print(f"current_gen: {solution['generation']}, current_idx: {current_idx}")
@@ -607,24 +622,11 @@ def evaluate(args):
         for model in args.evaluator_model.split(','):
             global defender_client, defender_model_name, defender_model_name_abbr
             if model.startswith('http://'):
-                defender_client = openai.OpenAI(base_url=model)
+                defender_client = setup_client(model)
                 defender_model_name = defender_client.models.list().data[0].id
                 defender_model_name_abbr = extract_model_name(defender_model_name)
             else:
-                # Set up proprietary model
-                if model.startswith('gpt'):
-                    defender_client = openai.OpenAI()
-                elif model.startswith('deepseek'):
-                    defender_client = openai.OpenAI(api_key=os.environ['DEEPSEEK_API_KEY'], base_url="https://api.deepseek.com")
-                elif model.startswith('gemini'):
-                    defender_client = openai.OpenAI(
-                        api_key=os.environ['GEMINI_API_KEY'],
-                        base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
-                else:
-                    defender_client = openai.OpenAI(
-                        api_key=os.environ['OPENROUTER_API_KEY'],
-                        base_url="https://openrouter.ai/api/v1")
-
+                defender_client = setup_client(model)
                 defender_model_name = model
                 defender_model_name_abbr = extract_model_name(defender_model_name)
             print(f"Evaluating on target model {defender_model_name}")
@@ -656,6 +658,31 @@ def evaluate(args):
 
 from typing import Dict, List, Tuple
 
+
+def setup_client(model_string: str) -> openai.OpenAI:
+    """Set up Endpoint for different model providers.
+    
+    Args:
+        model_string: The model identifier or endpoint
+        
+    Returns:
+        An initialized OpenAI-compatible client
+    """
+    if model_string.startswith('http://'):
+        return openai.OpenAI(base_url=model_string)
+    elif model_string.startswith('gpt'):
+        return openai.OpenAI()
+    elif model_string.startswith('deepseek'):
+        return openai.OpenAI(api_key=os.environ['DEEPSEEK_API_KEY'], base_url="https://api.deepseek.com")
+    elif model_string.startswith('gemini'):
+        return openai.OpenAI(
+            api_key=os.environ['GEMINI_API_KEY'],
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
+    else:
+        # Default to OpenRouter for other model strings
+        return openai.OpenAI(
+            api_key=os.environ['OPENROUTER_API_KEY'],
+            base_url="https://openrouter.ai/api/v1")
 
 
 def redteam_metric(batch_inputs: List[List[Dict]], max_workers: int, defender: str = None) -> Tuple[float, float]:
@@ -861,10 +888,7 @@ def main(argv):
     args = parse_args(argv)
 
     global meta_agent_client
-    if args.meta_agent_model.startswith('gpt'):
-        meta_agent_client = openai.OpenAI()
-    elif args.meta_agent_model.startswith('deepseek'):
-        meta_agent_client = openai.OpenAI(api_key=os.environ['DEEPSEEK_API_KEY'], base_url="https://api.deepseek.com")
+    meta_agent_client = setup_client(args.meta_agent_model)
     
     global attacker_client, attacker_model_name, attacker_model_name_abbr, attacker_endpoints, _attacker_endpoint_cycle
     if ',' in args.attacker_model:
@@ -890,17 +914,13 @@ def main(argv):
     
 
     global defender_client, defender_model_name, defender_model_name_abbr
-    if args.defender_model.startswith('http://'):
-        defender_client = openai.OpenAI(base_url=args.defender_model)
-        defender_model_name = defender_client.models.list().data[0].id
-        defender_model_name_abbr = extract_model_name(defender_model_name)
-    else:
-        defender_client = openai.OpenAI()
-        defender_model_name = args.defender_model
-        defender_model_name_abbr = defender_model_name
+    defender_client = setup_client(args.defender_model)
+    defender_model_name = defender_client.models.list().data[0].id
+    defender_model_name_abbr = extract_model_name(defender_model_name)
 
     global harmbench_classifier_client
-    harmbench_classifier_client = openai.OpenAI(base_url=args.classifier_model)
+    harmbench_classifier_client = setup_client(args.classifier_model)
+        
 
     global DEBUG_MODE
     DEBUG_MODE = args.debug

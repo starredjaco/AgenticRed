@@ -1,12 +1,4 @@
 #!/bin/bash
-#SBATCH -J mistral_server        # Job name
-#SBATCH --partition=h100        # Use GPU partition "a100"
-#SBATCH --gres gpu:1       # set 2 GPUs per job
-#SBATCH --nodes=1
-#SBATCH -t 8-00:00             # Maximum run-time in D-HH:MM
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=128G            # Memory pool for all cores (see also --mem-per-cpu)
-
 export VLLM_LOGGING_LEVEL=DEBUG
 export NCCL_DEBUG=INFO
 export TORCH_DISTRIBUTED_DEBUG=DETAIL

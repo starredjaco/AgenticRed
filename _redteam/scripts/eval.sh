@@ -1,11 +1,4 @@
 #!/bin/bash
-#SBATCH -J eval
-#SBATCH -p spyder
-#SBATCH -t 8-00:00 
-#SBATCH --mem=10G
-#SBATCH -o slurm/hostname_%j.out
-#SBATCH -e slurm/hostname_%j.err
-set -euo pipefail
 
 # Set HF_HOME if needed
 # export HF_HOME=''
@@ -16,7 +9,7 @@ LLAMA3_RR_ENDPOINT=''
 ATTACKER_ENDPOINTS=''
 VICUNA_ENDPOINTS=''
 CLASSIFIER_ENDPOINT=''
-EXPR_NAME=self-refine
+EXPR_NAME=redteam_archive # name for the generated json in results directory
 EVALUATOR_MODELS='gpt-3.5-turbo,gpt-4o-mini'
 BENCHMARK=harmbench
 

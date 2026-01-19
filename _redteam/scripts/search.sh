@@ -1,12 +1,4 @@
 #!/bin/bash
-#SBATCH -J exp_8
-#SBATCH -p spyder
-#SBATCH -t 8-00:00 
-#SBATCH --mem=10G
-#SBATCH -o slurm/hostname_%j.out
-#SBATCH -e slurm/hostname_%j.err
-set -euo pipefail
-
 # Set HF_HOME if needed
 # export HF_HOME=''
 
@@ -17,8 +9,30 @@ ATTACKER_ENDPOINTS=''
 VICUNA_ENDPOINTS=''
 CLASSIFIER_ENDPOINT=''
 
+
+# Parse --expr and --seed as named arguments
 INDEX=1
 SEED=42
+
+while [[ $# -gt 0 ]]; do
+    key="$1"
+    case $key in
+        --expr)
+            INDEX="$2"
+            shift # past argument
+            shift # past value
+            ;;
+        --seed)
+            SEED="$2"
+            shift
+            shift
+            ;;
+        *)
+            echo "Unknown argument: $1"
+            exit 1
+            ;;
+    esac
+done
 
 echo "Experiment index: ${INDEX}"
 echo "Shuffle seed: ${SEED}"
@@ -27,129 +41,51 @@ echo "Shuffle seed: ${SEED}"
 case "$INDEX" in
     1)
         echo "1) baseline"
-        python -u search.py \
-            --valid_size 50 \
-            --benchmark harmbench \
-            --attacker_model $ATTACKER_ENDPOINT \
-            --defender_model $LLAMA2_ENDPOINT \
-            --classifier_model $CLASSIFIER_ENDPOINT \
-            --meta_agent_model gpt-5-2025-08-07 \
-            --n_repeat 1 \
-            --debug_max 5 \
-            --max_workers 16 \
-            --shuffle_seed $SEED
+        env ATTACKER_ENDPOINT="$ATTACKER_ENDPOINT" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT" SEED="$SEED" \
+        envsubst < ../configs/exp1_baseline.yaml > ../configs/exp1_baseline_sub.yaml
+        python -u search.py --config ../configs/exp1_baseline_sub.yaml
         ;;
-
     2)
         echo "2) switch target model -> LLAMA3"
-        python -u search.py \
-            --valid_size 50 \
-            --benchmark harmbench \
-            --attacker_model $ATTACKER_ENDPOINTS \
-            --defender_model $LLAMA3_ENDPOINT \
-            --classifier_model $CLASSIFIER_ENDPOINT \
-            --meta_agent_model gpt-5-2025-08-07 \
-            --n_repeat 1 \
-            --debug_max 5 \
-            --max_workers 16 \
-            --shuffle_seed $SEED
+        env ATTACKER_ENDPOINTS="$ATTACKER_ENDPOINTS" LLAMA3_ENDPOINT="$LLAMA3_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT" SEED="$SEED" \
+        envsubst < ../configs/exp2_llama3.yaml > ../configs/exp2_llama3_sub.yaml
+        python -u search.py --config ../configs/exp2_llama3_sub.yaml
         ;;
     3)
         echo "3) switch attacker model -> VICUNA"
-        python -u search.py \
-            --valid_size 50 \
-            --benchmark harmbench \
-            --attacker_model $VICUNA_ENDPOINTS \
-            --defender_model $LLAMA2_ENDPOINT \
-            --classifier_model $CLASSIFIER_ENDPOINT \
-            --meta_agent_model gpt-5-2025-08-07 \
-            --n_repeat 1 \
-            --debug_max 5 \
-            --max_workers 16 \
-            --shuffle_seed $SEED
+        env VICUNA_ENDPOINTS="$VICUNA_ENDPOINTS" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT" SEED="$SEED" \
+        envsubst < ../configs/exp3_vicuna.yaml > ../configs/exp3_vicuna_sub.yaml
+        python -u search.py --config ../configs/exp3_vicuna_sub.yaml
         ;;
-
     4)
         echo "4) switch meta agent model -> deepseek-reasoner"
-        python -u search.py \
-            --valid_size 50 \
-            --benchmark harmbench \
-            --attacker_model $ATTACKER_ENDPOINTS \
-            --defender_model $LLAMA2_ENDPOINT \
-            --classifier_model $CLASSIFIER_ENDPOINT \
-            --meta_agent_model deepseek-reasoner \
-            --n_repeat 1 \
-            --debug_max 5 \
-            --max_workers 16 \
-            --shuffle_seed $SEED
+        env ATTACKER_ENDPOINTS="$ATTACKER_ENDPOINTS" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT" SEED="$SEED" \
+        envsubst < ../configs/exp4_deepseek.yaml > ../configs/exp4_deepseek_sub.yaml
+        python -u search.py --config ../configs/exp4_deepseek_sub.yaml
         ;;
-
     5)
         echo "5) w/o evolutionary pressure"
-        python -u search.py \
-            --valid_size 50 \
-            --benchmark harmbench \
-            --attacker_model $ATTACKER_ENDPOINTS \
-            --defender_model $LLAMA2_ENDPOINT \
-            --classifier_model $CLASSIFIER_ENDPOINT \
-            --meta_agent_model gpt-5-2025-08-07 \
-            --n_repeat 1 \
-            --debug_max 5 \
-            --max_workers 16 \
-            --shuffle_seed $SEED \
-            --num_offspring_per_gen 1 \
-            --expr_name redteam_gpt-5-2025-08-07_Mistral-7B-Instruct-v0.3_Llama-2-7b-chat-hf_2_1_offspring
+        env ATTACKER_ENDPOINTS="$ATTACKER_ENDPOINTS" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT" SEED="$SEED" \
+        envsubst < ../configs/exp5_no_evo.yaml > ../configs/exp5_no_evo_sub.yaml
+        python -u search.py --config ../configs/exp5_no_evo_sub.yaml
         ;;
-
     6)
         echo "6) w/ weak archive"
-        python -u search.py \
-            --valid_size 50 \
-            --benchmark harmbench \
-            --attacker_model $ATTACKER_ENDPOINTS \
-            --defender_model $LLAMA2_ENDPOINT \
-            --classifier_model $CLASSIFIER_ENDPOINT \
-            --meta_agent_model gpt-5-2025-08-07 \
-            --n_repeat 1 \
-            --debug_max 5 \
-            --max_workers 16 \
-            --shuffle_seed $SEED \
-            --expr_name redteam_gpt-5-2025-08-07_Mistral-7B-Instruct-v0.3_Llama-2-7b-chat-hf_2_weaker_archive \
-            --weak_init_archive
+        env ATTACKER_ENDPOINTS="$ATTACKER_ENDPOINTS" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT" SEED="$SEED" \
+        envsubst < ../configs/exp6_weak_archive.yaml > ../configs/exp6_weak_archive_sub.yaml
+        python -u search.py --config ../configs/exp6_weak_archive_sub.yaml
         ;;
     7)
         echo "7) w/ diversity incentive"
-        # fill with your desired args for experiment 7
-        python -u search.py \
-            --valid_size 50 \
-            --benchmark harmbench \
-            --attacker_model $ATTACKER_ENDPOINTS \
-            --defender_model $LLAMA2_ENDPOINT \
-            --classifier_model $CLASSIFIER_ENDPOINT \
-            --meta_agent_model gpt-5-2025-08-07 \
-            --n_repeat 1 \
-            --debug_max 5 \
-            --max_workers 16 \
-            --shuffle_seed $SEED \
-            --expr_name redteam_gpt-5-2025-08-07_Mistral-7B-Instruct-v0.3_Llama-2-7b-chat-hf_2_diversity_incentive \
-            --diversity_incentive
+        env ATTACKER_ENDPOINTS="$ATTACKER_ENDPOINTS" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT" SEED="$SEED" \
+        envsubst < ../configs/exp7_diversity_incentive.yaml > ../configs/exp7_diversity_incentive_sub.yaml
+        python -u search.py --config ../configs/exp7_diversity_incentive_sub.yaml
         ;;
     8)
         echo "8) w/ diversity threshold"
-        # fill with your desired args for experiment 8
-        python -u search.py \
-            --valid_size 50 \
-            --benchmark harmbench \
-            --attacker_model $ATTACKER_ENDPOINTS \
-            --defender_model $LLAMA2_ENDPOINT \
-            --classifier_model $CLASSIFIER_ENDPOINT \
-            --meta_agent_model gpt-5-2025-08-07 \
-            --n_repeat 1 \
-            --debug_max 5 \
-            --max_workers 16 \
-            --shuffle_seed $SEED \
-            --expr_name redteam_gpt-5-2025-08-07_Mistral-7B-Instruct-v0.3_Llama-2-7b-chat-hf_2_diversity_threshold_0.2 \
-            --diversity_threshold 0.2
+        env ATTACKER_ENDPOINTS="$ATTACKER_ENDPOINTS" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT" SEED="$SEED" \
+        envsubst < ../configs/exp8_diversity_threshold.yaml > ../configs/exp8_diversity_threshold_sub.yaml
+        python -u search.py --config ../configs/exp8_diversity_threshold_sub.yaml
         ;;
     *)
         echo "Unknown experiment index: ${INDEX}"

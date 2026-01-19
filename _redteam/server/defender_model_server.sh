@@ -1,11 +1,4 @@
 #!/bin/bash
-#
-#SBATCH -J l3-rr
-#SBATCH --partition=a40        # Use GPU partition "a100"
-#SBATCH --gres gpu:1            # set 2 GPUs per job
-#SBATCH -t 7-00:00              # Maximum run-time in D-HH:MM
-#SBATCH --mem=20G               # Memory pool for all cores (see also --mem-per-cpu)
-
 export VLLM_LOGGING_LEVEL=DEBUG
 
 # LLAMA-2-7B-Chat model path
