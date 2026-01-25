@@ -125,3 +125,19 @@ bash _redteam/search.sh --expr 1 --seed 42
 # 3. Run evaluation
 bash _redteam/eval.sh
 ```
+
+## Citation
+
+```bibtex
+@misc{yuan2026agenticredoptimizingagenticsystems,
+      title={AgenticRed: Optimizing Agentic Systems for Automated Red-teaming}, 
+      author={Jiayi Yuan and Jonathan Nöther and Natasha Jaques and Goran Radanović},
+      year={2026},
+      eprint={2601.13518},
+      archivePrefix={arXiv},
+      primaryClass={cs.AI},
+      url={https://arxiv.org/abs/2601.13518}, 
+}
+```
+
+
