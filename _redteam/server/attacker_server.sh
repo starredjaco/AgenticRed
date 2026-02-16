@@ -3,9 +3,10 @@ export VLLM_LOGGING_LEVEL=DEBUG
 export NCCL_DEBUG=INFO
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
-CHAT_TEMPLATE_DIR=''
-VICUNA_MODEL=''
-MISTRAL_MODEL=''
+CHAT_TEMPLATE_DIR=/home/jyuan/chat_templates/chat_templates
+VICUNA_MODEL='/SWS/llms/nobackup/hub/models--lmsys--vicuna-13b-v1.5/snapshots/c8327bf999adbd2efe2e75f6509fa01436100dc2/'
+MISTRAL_MODEL='/SWS/llms/nobackup/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/0d4b76e1efeb5eb6f6b5e757c79870472e04bd3a/'
+
 
 # Function to check if a port is available
 check_port() {
@@ -25,7 +26,7 @@ find_free_port() {
 
 # Find available port starting from 8090
 PORT=$(find_free_port 8090)
-echo "Using available port: $PORT"
+echo "Using available port: $PORT for attacker model $MISTRAL_MODEL"
 
 # vicuna server
 # python -m vllm.entrypoints.openai.api_server \
@@ -37,7 +38,7 @@ echo "Using available port: $PORT"
 #   --port $PORT
 
 # mistral server
-python -m vllm.entrypoints.openai.api_server \
+CUDA_VISIBLE_DEVICES=1 python -m vllm.entrypoints.openai.api_server \
     --model $MISTRAL_MODEL \
     --guided-decoding-backend lm-format-enforcer \
     --tensor-parallel-size 1 \

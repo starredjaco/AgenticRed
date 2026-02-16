@@ -49,10 +49,9 @@ Inside `server/`, you should have scripts or configs such as:
 ```bash
 cd server/
 
-# Example (adapt to actual script names)
-bash start_attacker.sh          # Starts attacker model server
-bash start_classifier.sh        # Starts classifier / guardrail model server
-bash start_defender.sh          # Starts defender / target model server
+bash attacker_server.sh          # Starts attacker model server
+bash classifier_server.sh        # Starts classifier / guardrail model server
+bash defender_server.sh          # Starts defender / target model server
 ```
 
 Document the actual ports and endpoints so the rest of the pipeline can reference them.
