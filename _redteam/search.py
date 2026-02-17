@@ -573,7 +573,7 @@ def search(args):
         next_solution = best_kid
         next_solution['generation'] = n + 1
         
-        acc_list, items, self_bleu_score = evaluate_forward_fn(args, code, defender=args.defender_model, agent_name=next_solution.get('name', 'unknown'))
+        acc_list, items, self_bleu_score = evaluate_forward_fn(args, next_solution['code'], defender=args.defender_model, agent_name=next_solution.get('name', 'unknown'))
         self_bleu_4 = self_bleu_score.get('self_bleu_4', 0)
         self_bleu_coef = -1 if not args.diversity_incentive else 0
         fitness_str = bootstrap_confidence_interval(acc_list, self_bleu_coef=self_bleu_coef, self_bleu_score=self_bleu_4)
