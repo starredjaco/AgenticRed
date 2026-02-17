@@ -21,7 +21,6 @@ MODE='search'
 
 # Parse --expr and --seed as named arguments
 INDEX=1
-SEED=1
 
 while [[ $# -gt 0 ]]; do
     key="$1"
@@ -31,11 +30,6 @@ while [[ $# -gt 0 ]]; do
             shift # past argument
             shift # past value
             ;;
-        --seed)
-            SEED="$2"
-            shift
-            shift
-            ;;
         *)
             echo "Unknown argument: $1"
             exit 1
@@ -44,7 +38,6 @@ while [[ $# -gt 0 ]]; do
 done
 
 echo "Experiment index: ${INDEX}"
-echo "Shuffle seed: ${SEED}"
 
 
 case "$INDEX" in

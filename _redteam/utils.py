@@ -158,10 +158,12 @@ def bootstrap_confidence_interval(data, num_bootstrap_samples=100000, confidence
 
     # Return the formatted string with confidence interval and median
     formatted_str = f"95% Bootstrap Confidence Interval: ({ci_lower_percent:.1f}%, {ci_upper_percent:.1f}%), Median: {median_percent:.1f}%"
+    print(formatted_str)
     
     # Weighted sum with self-bleu score as diversity incentive
-    print(f"self_bleu_score is {self_bleu_score}")
-    median += self_bleu_coef * self_bleu_score
+    # print(f"self_bleu_score is {self_bleu_score}")
+    # median += self_bleu_coef * self_bleu_score
+    
     asr_str = f"attack success rate is {median}"
     return asr_str
 

@@ -83,21 +83,19 @@ Typical usage:
 
 ```bash
 cd _redteam
-bash scripts/search.sh \
-    --expr EXP_INDEX \
-    --seed SEED \
+bash scripts/search.sh
 
-e.g. bash search.sh --expr 1 --seed 42
+e.g. bash search.sh --expr 1
 ```
 
 Key arguments (adapt to your implementation):
 
-- `--experiment-index`: Experiment index corresponding to different configurations.
-- `--seed`: Random seed.
+- `--expr`: Experiment index corresponding to different configurations.
 - `--config`: Path to a config file specifying:
     - Attacker, classifier, defender endpoints
     - Search hyperparameters (iterations, beam width, budgets, etc.)
-    - Output directory for JSON logs
+    - Output directory for JSON logs: save_dir
+    - Whether to enable OpenRouter
 ---
 
 ## 3. Run the Evaluation Process
@@ -108,18 +106,22 @@ After search completes, evaluate the discovered attacks on a separate evaluation
 cd _redteam
 bash scripts/eval.sh
 ```
+
+Key arguments (adapt to your implementation):
+- evaluator_model: Models used for evaluation
+- benchmark: Currently only implemented HarmBench and StrongREJECT.
 ---
 
 ## Example Workflow
 
 ```bash
 # 1. Start servers if you are hosting local servers
-bash server/attacker_model_server.sh
-bash server/defender_model_server.sh
-bash server/classify_model_server.sh
+bash server/attacker_server.sh
+bash server/defender_server.sh
+bash server/classifirt_server.sh
 
 # 2. Run search
-bash _redteam/search.sh --expr 1 --seed 42
+bash _redteam/search.sh --expr 1
 
 # 3. Run evaluation
 bash _redteam/eval.sh

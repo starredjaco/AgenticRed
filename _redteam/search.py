@@ -41,6 +41,7 @@ SOLUTION_POOL_SIZE = 15
 DEBUG_MODE = False
 SEARCHING_MODE = True
 MAX_WORKERS = 1
+USE_OPENROUTER = False
 
 meta_agent_client = None
 attacker_client = None
@@ -82,6 +83,7 @@ def parse_args(argv=None):
     parser.add_argument("--weak_init_archive", action='store_true', default=False, help="Having a weak initial archive")
     parser.add_argument("--diversity_incentive", action='store_true', default=False, help="Having a diversity incentive in fitness")
     parser.add_argument("--diversity_threshold", type=float, default=1.0, help="Diversity threshold for self-BLEU score")
+    parser.add_argument("--use_openrouter", action='store_true', default=False, help="Use OpenRouter for all API clients")
 
     # Parse known args first to get config path
     args, unknown = parser.parse_known_args(argv)
@@ -89,9 +91,9 @@ def parse_args(argv=None):
     if args.config:
         with open(args.config, 'r') as f:
             config = yaml.safe_load(f)
-    # Set defaults from config if not set by CLI
+    # Override from config if not set by CLI
     for key, value in config.items():
-        if hasattr(args, key) and getattr(args, key) is None:
+        if hasattr(args, key):
             setattr(args, key, value)
     # Required fields check
     required = ["attacker_model", "defender_model", "classifier_model"]
@@ -350,11 +352,12 @@ class Optimizer(LLMAgentBase):
 
 
 class AgentSystem():
-    def __init__(self) -> None:
+    def __init__(self, agent_name="unknown") -> None:
         self.id = random_id()
         self.query_counter = 0
         self.jailbreak_success = False
         self.jailbreak_item = {"jailbreak": False}
+        self.agent_name = agent_name
 
     @backoff.on_exception(backoff.expo, openai.RateLimitError)
     def get_response(self, prompt):
@@ -417,6 +420,7 @@ class AgentSystem():
             if jailbreak:
                 self.jailbreak_success = True
                 print("Found a jailbreaking prompt:", item)
+                wandb.log({"jailbreak_found": wandb.Table(columns=["behavior", "prompt", "generation", "query_counter", "agent_name"], data=[[item["behavior"], item["prompt"], item["generation"], self.query_counter, self.agent_name]])})
                 self.jailbreak_item.update(item)
                 print("Query-per-success:", self.query_counter)
             jailbreaks.append(jailbreak)
@@ -455,7 +459,7 @@ def search(args):
         print(f"============Initial Archive: {solution['name']}=================")
         try:
             print(solution["code"])
-            acc_list, items, self_bleu_score = evaluate_forward_fn(args, solution["code"], defender=args.defender_model, use_history=solution.get('history') if args.use_history else None)
+            acc_list, items, self_bleu_score = evaluate_forward_fn(args, solution["code"], defender=args.defender_model, use_history=solution.get('history') if args.use_history else None, agent_name=solution.get('name', 'unknown'))
         except Exception as e:
             print("During evaluating initial archive:")
             raise e
@@ -529,7 +533,7 @@ def search(args):
                     code = next_solution["code"] if "code" in next_solution else next_solution["thought"]["code"]
                     # test for one pass
                     print("next solution candidate\n", next_solution['code'])
-                    acc_list, items, self_bleu_score = evaluate_forward_fn(args, code, test_pass=True, defender=args.defender_model)
+                    acc_list, items, self_bleu_score = evaluate_forward_fn(args, code, test_pass=True, defender=args.defender_model, agent_name=next_solution.get('name', 'unknown'))
                     if np.mean(acc_list) < 0.01 and SEARCHING_MODE:
                         raise Exception("All 0 accuracy")
                     if np.mean(acc_list) > best_fitness_val:
@@ -547,7 +551,7 @@ def search(args):
                         next_solution = get_next_generation_solution(msg_list)
                         code = next_solution["code"] if "code" in next_solution else next_solution["thought"]["code"]
                         # test for one pass
-                        acc_list, items, self_bleu_score = evaluate_forward_fn(args, code, test_pass=True, defender=args.defender_model)
+                        acc_list, items, self_bleu_score = evaluate_forward_fn(args, code, test_pass=True, defender=args.defender_model, agent_name=next_solution.get('name', 'unknown'))
                         if np.mean(acc_list) < 0.01 and SEARCHING_MODE:
                             raise Exception("All 0 accuracy")
                         if self_bleu_score >= args.diversity_threshold:
@@ -569,7 +573,7 @@ def search(args):
         next_solution = best_kid
         next_solution['generation'] = n + 1
         
-        acc_list, items, self_bleu_score = evaluate_forward_fn(args, code, defender=args.defender_model)
+        acc_list, items, self_bleu_score = evaluate_forward_fn(args, code, defender=args.defender_model, agent_name=next_solution.get('name', 'unknown'))
         self_bleu_4 = self_bleu_score.get('self_bleu_4', 0)
         self_bleu_coef = -1 if not args.diversity_incentive else 0
         fitness_str = bootstrap_confidence_interval(acc_list, self_bleu_coef=self_bleu_coef, self_bleu_score=self_bleu_4)
@@ -625,17 +629,17 @@ def evaluate(args):
                 defender_model_name = defender_client.models.list().data[0].id
                 defender_model_name_abbr = extract_model_name(defender_model_name)
             else:
-                defender_client = setup_client(model)
+                defender_client = setup_client("openrouter") if args.use_openrouter else setup_client(model)
                 defender_model_name = model
                 defender_model_name_abbr = extract_model_name(defender_model_name)
             print(f"Evaluating on target model {defender_model_name}")
             try:
                 print(solution["code"])
-                num_shuffle_seed = 1
                 acc_list_all = []
-                for shuffle_seed in range(num_shuffle_seed):
+                # repeat evaluation for different shuffle seeds
+                for shuffle_seed in range(args.n_repeat):
                     args.shuffle_seed = shuffle_seed
-                    acc_list, items, self_bleu_score = evaluate_forward_fn(args, solution["code"], defender=args.defender_model, use_history=solution.get('history') if args.use_history else None)
+                    acc_list, items, self_bleu_score = evaluate_forward_fn(args, solution["code"], defender=args.defender_model, use_history=solution.get('history') if args.use_history else None, agent_name=solution.get('name', 'unknown'))
                     acc_list_all.extend(acc_list)
             except Exception as e:
                 print("During evaluating initial archive:")
@@ -743,7 +747,7 @@ def redteam_metric(batch_inputs: List[List[Dict]], max_workers: int, defender: s
         max_workers=max_workers
     )
 
-    client = openai.OpenAI()
+    client = setup_client("openrouter") if USE_OPENROUTER else setup_client("gpt-4o-mini")
     strongreject_results = run_in_threads(
         func=lambda item: classify(client, item, benchmark='strongreject')[0],
         args_list=items,
@@ -760,7 +764,7 @@ def redteam_metric(batch_inputs: List[List[Dict]], max_workers: int, defender: s
 
 
 from constants import *
-def evaluate_forward_fn(args, forward_str, test_pass=False, defender=None, use_history=None):
+def evaluate_forward_fn(args, forward_str, test_pass=False, defender=None, use_history=None, agent_name="unknown"):
 
     print("evaluate_forward_fn\n", forward_str)
 
@@ -847,7 +851,7 @@ def evaluate_forward_fn(args, forward_str, test_pass=False, defender=None, use_h
         if test_pass:
             task_queue = task_queue[:TEST_SIZE]
         
-        agentSystems = [AgentSystem() for _ in range(len(task_queue))]
+        agentSystems = [AgentSystem(agent_name=agent_name) for _ in range(len(task_queue))]
         args_list = list(zip(agentSystems, task_queue))
         results = run_in_threads(lambda agentSystem_taskInfo: agentSystem_taskInfo[0].forward(agentSystem_taskInfo[1]), args_list, max_workers=max_workers)
         
@@ -865,7 +869,7 @@ def evaluate_forward_fn(args, forward_str, test_pass=False, defender=None, use_h
 
             # If the system didn't output sensible answer, try again.
             while len(extracted_answer) < MIN_RESPONSE_LENGTH:
-                agentSystem = AgentSystem()
+                agentSystem = AgentSystem(agent_name=agent_name)
                 res = agentSystem.forward(taskInfo)
                 extracted_answer = extract_answer(res)
 
@@ -887,7 +891,7 @@ def main(argv):
     args = parse_args(argv)
 
     global meta_agent_client
-    meta_agent_client = setup_client(args.meta_agent_model)
+    meta_agent_client = setup_client("openrouter") if args.use_openrouter else setup_client(args.meta_agent_model)
     
     global attacker_client, attacker_model_name, attacker_model_name_abbr, attacker_endpoints, _attacker_endpoint_cycle
     if ',' in args.attacker_model:
@@ -923,6 +927,9 @@ def main(argv):
 
     global DEBUG_MODE
     DEBUG_MODE = args.debug
+    
+    global USE_OPENROUTER
+    USE_OPENROUTER = args.use_openrouter
 
     args.expr_name = args.expr_name.replace('[META_AGENT]', args.meta_agent_model)
     args.expr_name = args.expr_name.replace('[ATTACKER]', attacker_model_name_abbr)
