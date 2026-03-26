@@ -1,13 +1,13 @@
 expr_name: redteam_expr_1_[META_AGENT]_[ATTACKER]_[DEFENDER]_[SEED]
 valid_size: 50
 benchmark: harmbench
-attacker_model: ${ATTACKER_ENDPOINT}
-defender_model: ${LLAMA2_ENDPOINT}
-classifier_model: ${CLASSIFIER_ENDPOINT}
+attacker_model: http://sws-2a100-06:8090/v1,http://sws-2a100-06:8091/v1
+defender_model: http://sws-2l40-03:8000/v1
+classifier_model: http://sws-2l40-04:8080/v1
 meta_agent_model: gpt-5-2025-08-07
 n_repeat: 1
 debug_max: 5
 max_workers: 16
-shuffle_seed: ${SEED}
+shuffle_seed: 6
 use_openrouter: true
 include_new_methods: true

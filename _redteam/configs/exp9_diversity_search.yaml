@@ -1,7 +1,6 @@
-expr_name: redteam_expr_1_[META_AGENT]_[ATTACKER]_[DEFENDER]_[SEED]
 valid_size: 50
 benchmark: harmbench
-attacker_model: ${ATTACKER_ENDPOINT}
+attacker_model: ${ATTACKER_ENDPOINTS}
 defender_model: ${LLAMA2_ENDPOINT}
 classifier_model: ${CLASSIFIER_ENDPOINT}
 meta_agent_model: gpt-5-2025-08-07
@@ -9,5 +8,6 @@ n_repeat: 1
 debug_max: 5
 max_workers: 16
 shuffle_seed: ${SEED}
-use_openrouter: true
-include_new_methods: true
+expr_name: redteam_gpt-5-2025-08-07_Mistral-7B-Instruct-v0.3_Llama-2-7b-chat-hf_2_diversity_search
+diversity_search: true
+succeed_memory_threshold: 0.6

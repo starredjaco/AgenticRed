@@ -1,0 +1,16 @@
+archive_path: /NS/MAS-llms02/work/jyuan/AgenticRed/results/redteam_gpt-5-2025-08-07_Mistral-7B-Instruct-v0.3_Llama-2-7b-chat-hf_3.json
+benchmark: easyjailbreak
+
+# Required runtime endpoints / models
+evaluator_model: http://sws-2l40-03:8000/v1
+attacker_model: http://sws-2a100-06:8090/v1,http://sws-2a100-06:8091/v1
+defender_model: http://sws-2l40-03:8000/v1
+classifier_model: http://sws-2l40-04:8080/v1
+
+meta_agent_model: gpt-5-2025-08-07
+n_repeat: 1
+debug_max: 5
+max_workers: 16
+shuffle_seed: 0
+valid_size: 50
+use_openrouter: false

@@ -1,29 +1,42 @@
 #!/bin/bash
+#SBATCH -J eval
+#SBATCH -p spyder
+#SBATCH -t 7-00:00 
+#SBATCH --mem=10G
+#SBATCH -o slurm/hostname_%j.out
+#SBATCH -e slurm/hostname_%j.err
 
-# Set HF_HOME if needed
-# export HF_HOME=''
+set -euo pipefail
 
-LLAMA2_ENDPOINT=''
-LLAMA3_ENDPOINT=''
-LLAMA3_RR_ENDPOINT=''
-ATTACKER_ENDPOINTS=''
-VICUNA_ENDPOINTS=''
-CLASSIFIER_ENDPOINT=''
-EXPR_NAME=redteam_archive # name for the generated json in results directory
-EVALUATOR_MODELS='gpt-3.5-turbo,gpt-4o-mini'
-BENCHMARK=harmbench
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REDTEAM_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+CONFIG_PATH="./configs/eval_easyjailbreak.yaml"
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --config)
+            CONFIG_PATH="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown argument: $1"
+            echo "Usage: bash scripts/eval.sh --config <yaml>"
+            exit 1
+            ;;
+    esac
+done
+
+if [[ -z "${CONFIG_PATH}" ]]; then
+    echo "Missing required argument: --config <yaml>"
+    exit 1
+fi
+
+if [[ ! -f "${CONFIG_PATH}" ]]; then
+    echo "Config file not found: ${CONFIG_PATH}"
+    exit 1
+fi
 
 python -u search.py \
     --mode evaluate \
-    --valid_size 50 \
-    --benchmark $BENCHMARK \
-    --expr_name $EXPR_NAME \
-    --attacker_model $ATTACKER_ENDPOINTS \
-    --defender_model $LLAMA2_ENDPOINT \
-    --evaluator_model $EVALUATOR_MODELS \
-    --classifier_model $CLASSIFIER_ENDPOINT \
-    --meta_agent_model gpt-5-2025-08-07 \
-    --n_repeat 1 \
-    --debug_max 5 \
-    --max_workers 16 \
-    --shuffle_seed 0
+    --config "${CONFIG_PATH}"

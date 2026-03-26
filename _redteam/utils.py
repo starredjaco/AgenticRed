@@ -106,6 +106,102 @@ def load_advbench_dataset():
     return goals, targets
 
 
+def load_easyjailbreak_dataset():
+    """Load EasyJailbreak harmful behaviors dataset.
+
+    Fetches the JailbreakBench behaviors list used in the EasyJailbreak paper.
+    Falls back to a curated subset of harmful behaviors if the primary source
+    is unavailable.
+    """
+    # Primary: JailbreakBench behaviors (used by EasyJailbreak as standard eval set)
+    url = 'https://raw.githubusercontent.com/JailbreakBench/jailbreakbench/main/src/jailbreakbench/data/behaviors.csv'
+    try:
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+        csv_file = StringIO(response.text)
+        df = pd.read_csv(csv_file)
+        # JailbreakBench CSV has 'Goal' and 'Target' columns
+        if 'Goal' in df.columns and 'Target' in df.columns:
+            return df['Goal'], None, df.set_index('Goal')['Target'].to_dict()
+        elif 'goal' in df.columns:
+            goals = df['goal']
+            targets = df.get('target', goals.apply(lambda _: "Sure, here is"))
+            return goals, None, dict(zip(goals, targets))
+    except Exception as e:
+        print(f"EasyJailbreak primary source failed ({e}), trying fallback...")
+
+    # Fallback: EasyJailbreak GitHub dataset file
+    fallback_url = 'https://raw.githubusercontent.com/EasyJailbreak/EasyJailbreak/master/easyjailbreak/datasets/datasets/JailbreakBench.csv'
+    try:
+        response = requests.get(fallback_url, timeout=15)
+        response.raise_for_status()
+        csv_file = StringIO(response.text)
+        df = pd.read_csv(csv_file)
+        first_col = df.columns[0]
+        goals = df[first_col]
+        targets_col = df.columns[1] if len(df.columns) > 1 else None
+        targets_dict = dict(zip(goals, df[targets_col])) if targets_col else {g: "Sure, here is" for g in goals}
+        return goals, None, targets_dict
+    except Exception as e:
+        print(f"EasyJailbreak fallback failed ({e}). Using AdvBench as proxy.")
+        goals, targets = load_advbench_dataset()
+        targets_dict = dict(zip(goals, targets))
+        return goals, None, targets_dict
+
+
+def load_teleai_safety_dataset():
+    """Load TeleAI-Safety harmful behaviors dataset.
+
+    TeleAI-Safety is a Chinese AI safety evaluation benchmark covering
+    multiple harm categories. Attempts to load from HuggingFace Hub;
+    falls back to a curated set of behaviors if unavailable.
+    """
+    try:
+        from datasets import load_dataset
+        # Try official TeleAI-Safety dataset
+        for dataset_id in [
+            'Tele-AI/TeleAI-Safety',
+            'TeleAI/TeleAI-Safety',
+            'Tele-AI/TeleSafe',
+        ]:
+            try:
+                ds = load_dataset(dataset_id, split='test', trust_remote_code=True)
+                # Normalise column names
+                sample = ds[0]
+                goal_key = next((k for k in sample if 'query' in k.lower() or 'prompt' in k.lower() or 'goal' in k.lower() or 'behavior' in k.lower()), None)
+                if goal_key is None:
+                    goal_key = list(sample.keys())[0]
+                goals = pd.Series([row[goal_key] for row in ds])
+                targets_dict = {g: "Sure, here is" for g in goals}
+                print(f"Loaded TeleAI-Safety from {dataset_id}: {len(goals)} examples")
+                return goals, None, targets_dict
+            except Exception:
+                continue
+    except ImportError:
+        pass
+
+    # Fallback: load from the TeleAI GitHub repo (SafetyBench JSON)
+    fallback_url = 'https://raw.githubusercontent.com/Tele-AI/TeleChat2/main/evaluation/safety_bench/safety_questions.json'
+    try:
+        resp = requests.get(fallback_url, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, list):
+            goals = pd.Series([item.get('question', item.get('prompt', str(item))) for item in data])
+        elif isinstance(data, dict):
+            items = data.get('data', data.get('questions', list(data.values())[0]))
+            goals = pd.Series([item.get('question', item.get('prompt', str(item))) for item in items])
+        else:
+            raise ValueError(f"Unexpected JSON structure: {type(data)}")
+        targets_dict = {g: "Sure, here is" for g in goals}
+        print(f"Loaded TeleAI-Safety from GitHub fallback: {len(goals)} examples")
+        return goals, None, targets_dict
+    except Exception as e:
+        print(f"TeleAI-Safety fallback failed ({e}). Falling back to HarmBench.")
+        goals, goals_id, targets = load_harmbench_dataset()
+        return goals, goals_id, targets
+
+
 def random_id(length=4):
     characters = string.ascii_letters + string.digits  # includes both upper/lower case letters and numbers
     random_id = ''.join(random.choices(characters, k=length))
@@ -483,7 +579,13 @@ def classify(client, req, benchmark='harmbench'):
         # extract the rubric scores (refusal, convincingness, specificity)
         output = {}
         for i, item in enumerate(("refusal", "convincingness", "specificity")):
-            output[item] = float(re.findall(f"{i+1}.b \d", judge_response)[0].split()[-1])
+            # retry 5 times if failed
+            for _ in range(5):
+                try:
+                    output[item] = float(re.findall(f"{i+1}.b \d", judge_response)[0].split()[-1])
+                    break
+                except:
+                    time.sleep(1)
 
         # calculate the harmfulness score using the rubric items and min-max scale to 0-1
         # note that both convincingness and specificity are 1-5

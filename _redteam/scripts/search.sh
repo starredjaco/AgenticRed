@@ -11,12 +11,14 @@ set -euo pipefail
 export HF_HOME=/SWS/llms/nobackup/
 
 # Set model endpoints
-LLAMA2_ENDPOINT='http://sws-2l40-03:8001/v1'
+# LLAMA2_ENDPOINT='http://sws-2a100-02:8001/v1'
+LLAMA2_ENDPOINT='http://sws-2l40-03:8000/v1'
 LLAMA3_ENDPOINT='http://sws-2l40-03:8002/v1'
-ATTACKER_ENDPOINT='http://sws-2a100-01:8090/v1,http://sws-2a100-01:8091/v1'
+ATTACKER_ENDPOINT="http://sws-2a100-06:8090/v1,http://sws-2a100-06:8091/v1"
 VICUNA_ENDPOINTS=''
-CLASSIFIER_ENDPOINT='http://sws-2a100-02:8080/v1'
+CLASSIFIER_ENDPOINT='http://sws-2l40-04:8080/v1'
 MODE='search'
+SEED=6
 
 
 # Parse --expr and --seed as named arguments
@@ -43,51 +45,57 @@ echo "Experiment index: ${INDEX}"
 case "$INDEX" in
     1)
         echo "1) baseline"
-        env ATTACKER_ENDPOINT="$ATTACKER_ENDPOINT" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT"  \
+        env ATTACKER_ENDPOINT="$ATTACKER_ENDPOINT" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT" SEED="$SEED" \
         envsubst < ./configs/exp1_baseline.yaml > ./configs/exp1_baseline_sub.yaml
         python -u search.py --config ./configs/exp1_baseline_sub.yaml
         ;;
     2)
         echo "2) switch target model -> LLAMA3"
-        env ATTACKER_ENDPOINT="$ATTACKER_ENDPOINT" LLAMA3_ENDPOINT="$LLAMA3_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT"  \
+        env ATTACKER_ENDPOINT="$ATTACKER_ENDPOINT" LLAMA3_ENDPOINT="$LLAMA3_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT" SEED="$SEED" \
         envsubst < ./configs/exp2_llama3.yaml > ./configs/exp2_llama3_sub.yaml
         python -u search.py --config ./configs/exp2_llama3_sub.yaml
         ;;
     3)
         echo "3) switch attacker model -> VICUNA"
-        env VICUNA_ENDPOINTS="$VICUNA_ENDPOINTS" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT"  \
+        env VICUNA_ENDPOINTS="$VICUNA_ENDPOINTS" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT" SEED="$SEED" \
         envsubst < ./configs/exp3_vicuna.yaml > ./configs/exp3_vicuna_sub.yaml
         python -u search.py --config ./configs/exp3_vicuna_sub.yaml
         ;;
     4)
         echo "4) switch meta agent model -> deepseek-reasoner"
-        env ATTACKER_ENDPOINT="$ATTACKER_ENDPOINT" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT"  \
+        env ATTACKER_ENDPOINT="$ATTACKER_ENDPOINT" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT" SEED="$SEED" \ 
         envsubst < ./configs/exp4_deepseek.yaml > ./configs/exp4_deepseek_sub.yaml
         python -u search.py --config ./configs/exp4_deepseek_sub.yaml
         ;;
     5)
         echo "5) w/o evolutionary pressure"
-        env ATTACKER_ENDPOINT="$ATTACKER_ENDPOINT" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT"  \
+        env ATTACKER_ENDPOINT="$ATTACKER_ENDPOINT" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT"  SEED="$SEED" \
         envsubst < ./configs/exp5_no_evo.yaml > ./configs/exp5_no_evo_sub.yaml
         python -u search.py --config ./configs/exp5_no_evo_sub.yaml
         ;;
     6)
         echo "6) w/ weak archive"
-        env ATTACKER_ENDPOINT="$ATTACKER_ENDPOINT" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT"  \
+        env ATTACKER_ENDPOINT="$ATTACKER_ENDPOINT" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT"  SEED="$SEED" \
         envsubst < ./configs/exp6_weak_archive.yaml > ./configs/exp6_weak_archive_sub.yaml
         python -u search.py --config ./configs/exp6_weak_archive_sub.yaml
         ;;
     7)
         echo "7) w/ diversity incentive"
-        env ATTACKER_ENDPOINT="$ATTACKER_ENDPOINT" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT"  \
+        env ATTACKER_ENDPOINT="$ATTACKER_ENDPOINT" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT"  SEED="$SEED" \
         envsubst < ./configs/exp7_diversity_incentive.yaml > ./configs/exp7_diversity_incentive_sub.yaml
         python -u search.py --config ./configs/exp7_diversity_incentive_sub.yaml
         ;;
     8)
         echo "8) w/ diversity threshold"
-        env ATTACKER_ENDPOINT="$ATTACKER_ENDPOINT" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT"  \
+        env ATTACKER_ENDPOINT="$ATTACKER_ENDPOINT" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT"  SEED="$SEED" \
         envsubst < ./configs/exp8_diversity_threshold.yaml > ./configs/exp8_diversity_threshold_sub.yaml
         python -u search.py --config ./configs/exp8_diversity_threshold_sub.yaml
+        ;;
+    9)
+        echo "9) diversity search (novel prompt fitness via SucceedPromptMemory)"
+        env ATTACKER_ENDPOINTS="$ATTACKER_ENDPOINT" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT"  SEED="$SEED" \
+        envsubst < ./configs/exp9_diversity_search.yaml > ./configs/exp9_diversity_search_sub.yaml
+        python -u search.py --config ./configs/exp9_diversity_search_sub.yaml
         ;;
     *)
         echo "Unknown experiment index: ${INDEX}"
