@@ -38,7 +38,7 @@ echo "Using available port: $PORT for attacker model $MISTRAL_MODEL"
 #   --port $PORT
 
 # mistral server
-CUDA_VISIBLE_DEVICES=1 python -m vllm.entrypoints.openai.api_server \
+CUDA_VISIBLE_DEVICES=0 python -m vllm.entrypoints.openai.api_server \
     --model $MISTRAL_MODEL \
     --guided-decoding-backend lm-format-enforcer \
     --tensor-parallel-size 1 \

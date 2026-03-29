@@ -14,7 +14,8 @@ export HF_HOME=/SWS/llms/nobackup/
 # LLAMA2_ENDPOINT='http://sws-2a100-02:8001/v1'
 LLAMA2_ENDPOINT='http://sws-2l40-03:8000/v1'
 LLAMA3_ENDPOINT='http://sws-2l40-03:8002/v1'
-ATTACKER_ENDPOINT="http://sws-2a100-06:8090/v1,http://sws-2a100-06:8091/v1"
+QWEN3_8B_ENDPOINT='http://sws-2l40-03:8001/v1'
+ATTACKER_ENDPOINT="http://sws-2a100-06:8090/v1,http://sws-2a100-06:8091/v1,http://sws-2a40-01:8090/v1,http://sws-2a40-01:8091/v1,http://sws-2a40-03:8090/v1,http://sws-2a40-03:8091/v1"
 VICUNA_ENDPOINTS=''
 CLASSIFIER_ENDPOINT='http://sws-2l40-04:8080/v1'
 MODE='search'
@@ -45,7 +46,7 @@ echo "Experiment index: ${INDEX}"
 case "$INDEX" in
     1)
         echo "1) baseline"
-        env ATTACKER_ENDPOINT="$ATTACKER_ENDPOINT" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT" SEED="$SEED" \
+        env ATTACKER_ENDPOINT="$ATTACKER_ENDPOINT" LLAMA2_ENDPOINT="$LLAMA2_ENDPOINT" QWEN3_8B_ENDPOINT="$QWEN3_8B_ENDPOINT" CLASSIFIER_ENDPOINT="$CLASSIFIER_ENDPOINT" SEED="$SEED" \
         envsubst < ./configs/exp1_baseline.yaml > ./configs/exp1_baseline_sub.yaml
         python -u search.py --config ./configs/exp1_baseline_sub.yaml
         ;;
