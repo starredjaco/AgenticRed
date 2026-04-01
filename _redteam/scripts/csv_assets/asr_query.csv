@@ -1,0 +1,8 @@
+family,model,qwen3_asr,qwen3_query_time,llama2_asr,llama2_query_time
+Claude,Haiku 4.5,44,53,48,736
+Qwen,Qwen3 Max,90,43,96,167
+DeepSeek,DeepSeek V3.2,96,20,100,46
+DeepSeek,DeepSeek R1,90,33,100,45
+Claude,Sonnet 3.5,54,55,60,957
+GPT,GPT 5.1,70,52,100,94
+GPT,GPT 5.2,44,85,88,221

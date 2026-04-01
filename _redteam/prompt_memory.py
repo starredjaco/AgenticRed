@@ -373,6 +373,37 @@ class SucceedPromptMemory:
         }
 
     @classmethod
+    def avg_distance_to_memory(cls, candidate_prompts: List[str], k: int = 5) -> float:
+        """Average cosine distance from each candidate prompt to its k nearest neighbors in memory.
+
+        For each prompt in *candidate_prompts*, find the k closest prompts in
+        SucceedPromptMemory (smallest cosine distance) and average those distances.
+        Then average across all candidate prompts.
+
+        If memory has fewer than k entries, all memory prompts are used.
+        Returns 0.0 when either set is empty.  Higher = more diverse relative to
+        existing memory.
+        """
+        candidate_prompts = cls._normalize_prompt_list(candidate_prompts)
+        if not candidate_prompts:
+            return 0.0
+        memory = cls.get_all()
+        if not memory:
+            return 0.0
+        try:
+            cand_embs = cls._encode_prompts(candidate_prompts)   # (C, d)
+            mem_embs  = cls._encode_prompts(memory)              # (M, d)
+            # sim_matrix[i, j] = cosine similarity between candidate i and memory j
+            sim_matrix = np.clip(np.matmul(cand_embs, mem_embs.T), -1.0, 1.0)  # (C, M)
+            dist_matrix = 1.0 - sim_matrix                                      # (C, M)
+            # For each candidate keep only the k smallest distances (nearest neighbors)
+            k_eff = min(k, dist_matrix.shape[1])
+            knn_dists = np.partition(dist_matrix, k_eff - 1, axis=1)[:, :k_eff]  # (C, k_eff)
+            return float(np.mean(np.mean(knn_dists, axis=1)))
+        except Exception:
+            return 0.0
+
+    @classmethod
     def delta_diversity_if_added(cls, candidate_prompts: List[str]) -> Dict[str, float]:
         additional = cls._normalize_prompt_list(candidate_prompts)
         existing = cls.get_all()

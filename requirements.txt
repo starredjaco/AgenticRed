@@ -11,3 +11,4 @@ wandb
 vllm
 tqdm
 fast-bleu
+sentence-transformers

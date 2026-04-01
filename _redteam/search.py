@@ -88,6 +88,8 @@ def parse_args(argv=None):
     parser.add_argument("--attacker_model", type=str, default=None, help="Endpoint of the attacker model")
     parser.add_argument("--defender_model", type=str, default=None, help="Endpoint of the defender model")
     parser.add_argument("--evaluator_model", type=str, default=None, help="Endpoint of the evaluator model, comma-separated if multiple")
+    parser.add_argument("--eval_generation", type=int, default=None,
+                        help="If set in evaluate mode, only evaluate archive entries with this generation")
     parser.add_argument("--classifier_model", type=str, default=None, help="Endpoint of the classifier model")
     parser.add_argument("--wandb", type=str, required=False, default=None, help="If specified, resume the wandb run")
     parser.add_argument("--num_offspring_per_gen", type=int, default=3, help="Number of offsprings produced per generation")
@@ -141,49 +143,55 @@ _attacker_lock = threading.Lock()
 
 def get_next_client():
     """Thread-safe round-robin OpenAI client selector for attacker endpoints."""
-    global _attacker_endpoint_cycle
-    if not _attacker_endpoint_cycle:
-        raise RuntimeError("attacker endpoint cycle not initialized")
+    
+    def _try_get_next_client():
+        """Attempt to get next working client from the endpoint cycle."""
+        global _attacker_endpoint_cycle
+        if not _attacker_endpoint_cycle:
+            raise RuntimeError("attacker endpoint cycle not initialized")
 
-    # Try each endpoint in the cycle until a working one is found.
-    # We loop at most the number of endpoints to avoid infinite loops.
-    tried = set()
-    endpoints_count = 0
-    # get number of endpoints by peeking into the cycle: convert to list if possible
-    try:
-        # _attacker_endpoint_cycle is an itertools.cycle object; we can access the original endpoints via attacker_endpoints
-        endpoints_count = len(attacker_endpoints)
-    except Exception:
+        # Try each endpoint in the cycle until a working one is found.
+        # We loop at most the number of endpoints to avoid infinite loops.
+        tried = set()
         endpoints_count = 0
-
-    if endpoints_count <= 0:
-        raise RuntimeError("No attacker endpoints available")
-
-    for _ in range(endpoints_count):
-        with _attacker_lock:
-            base_url = next(_attacker_endpoint_cycle)
-        if base_url in tried:
-            # already tried this round
-            continue
-
-        # quick health-check: try listing models with a short timeout
+        # get number of endpoints by peeking into the cycle: convert to list if possible
         try:
-            client = openai.OpenAI(base_url=base_url)
-            # perform a lightweight call to ensure the endpoint is responding
-            # Some endpoints may raise various exceptions; treat any exception as failure and try next
-            client.models.list()
-            return client, base_url
-        except Exception as e:
-            tried.add(base_url)
-            # log the failure to wandb if available and keep trying others
-            try:
-                wandb.log({f"ATTACKER_ENDPOINT_FAILURE/{base_url}/{str(type(e).__name__)}": 1})
-            except Exception:
-                pass
-            # continue to next endpoint
+            # _attacker_endpoint_cycle is an itertools.cycle object; we can access the original endpoints via attacker_endpoints
+            endpoints_count = len(attacker_endpoints)
+        except Exception:
+            endpoints_count = 0
 
-    # If all endpoints failed, raise a clear error
-    raise RuntimeError(f"All attacker endpoints are unavailable: {attacker_endpoints}")
+        if endpoints_count <= 0:
+            raise RuntimeError("No attacker endpoints available")
+
+        for _ in range(endpoints_count):
+            with _attacker_lock:
+                base_url = next(_attacker_endpoint_cycle)
+            if base_url in tried:
+                # already tried this round
+                continue
+
+            # quick health-check: try listing models with a short timeout
+            try:
+                client = openai.OpenAI(base_url=base_url)
+                # perform a lightweight call to ensure the endpoint is responding
+                # Some endpoints may raise various exceptions; treat any exception as failure and try next
+                client.models.list()
+                return client, base_url
+            except Exception as e:
+                tried.add(base_url)
+                # log the failure to wandb if available and keep trying others
+                try:
+                    wandb.log({f"ATTACKER_ENDPOINT_FAILURE/{base_url}/{str(type(e).__name__)}": 1})
+                except Exception:
+                    pass
+                # continue to next endpoint
+
+        # If all endpoints failed, raise a clear error
+        raise RuntimeError(f"All attacker endpoints are unavailable: {attacker_endpoints}")
+    
+    # Retry the entire endpoint selection process with backoff
+    return with_retry(_try_get_next_client, retries=3, delay=10)
 
 
 @backoff.on_exception(backoff.expo, openai.RateLimitError)
@@ -202,6 +210,10 @@ def get_json_response_from_gpt(
     if isinstance(msg, tuple):
         msg = msg[0]
     assert isinstance(msg, str), f"msg must be either string, got {type(msg)}, {msg}"
+    
+    if 'qwen' in model.lower():
+        # Turn off thinking mode
+        msg = '/no_think ' + msg
     
     messages = [
             {"role": "system", "content": system_message},
@@ -440,18 +452,18 @@ class AgentSystem():
 
             t0 = time.time()
             # Some models (e.g., GPT-5) do not support max_tokens, temperature, top_p
-            if 'gpt-5' in defender_model_name.lower():
+            if defender_model_name.lower().startswith('gpt'):
                 content = defender_client.chat.completions.create(
                     model=defender_model_name,
                     messages=message_list,
                     max_completion_tokens=500
-                ).choices[0].message.content.strip()
-            elif 'gemini' in defender_model_name.lower():
+                ).choices[0].message.content
+            elif defender_model_name.lower().startswith('gemini'):
                 content = defender_client.chat.completions.create(
                     model=defender_model_name,
                     messages=message_list,
                     temperature=0
-                ).choices[0].message.content.strip()
+                ).choices[0].message.content
             elif 'qwen' in defender_model_name_abbr.lower():
                 # Turn off thinking mode
                 message_list[0]['content'] = '/no_think ' + message_list[0]['content']
@@ -461,7 +473,7 @@ class AgentSystem():
                     temperature=0,
                     top_p=1.0,
                     max_tokens=250
-                ).choices[0].message.content.strip()
+                ).choices[0].message.content
             else:
                 content = defender_client.chat.completions.create(
                     model=defender_model_name,
@@ -469,7 +481,13 @@ class AgentSystem():
                     temperature=0,
                     top_p=1.0,
                     max_tokens=250
-                ).choices[0].message.content.strip()
+                ).choices[0].message.content
+            if content is not None:
+                content = content.strip()
+            else:
+                content = ""
+                print("Warning: got None content from defender")
+                
             elapsed = time.time() - t0
             wandb.log({f"TIMING/{defender_model_name}": elapsed})
             self.query_counter += 1
@@ -504,21 +522,49 @@ class AgentSystem():
                     "generation": response,
             }
             jailbreak, logprob = classify(client=harmbench_classifier_client, req=item)
+            item["jailbreak"] = bool(jailbreak)
             if jailbreak:
-                self.jailbreak_success = True
-                # print("Found a jailbreaking prompt:", item)
-                wandb.log({"jailbreak_found": wandb.Table(columns=["behavior", "prompt", "generation", "query_counter", "agent_name"], data=[[item["behavior"], item["prompt"], item["generation"], self.query_counter, self.agent_name]])})
-                self.jailbreak_item.update(item)
-                if DIVERSITY_SEARCH and SucceedPromptMemory.is_enabled():
-                    SucceedPromptMemory.add(prompt)
-                    wandb.log({"succeed_memory_size": len(SucceedPromptMemory.get_all())})
-                print("Query-per-success:", self.query_counter)
+                counted_success = True
+                similar_to_succeed_memory = False
+                succeed_memory_similarity = 0.0
+                if DIVERSITY_SEARCH:
+                    similar_to_succeed_memory, succeed_memory_similarity = SucceedPromptMemory.is_similar(
+                        prompt,
+                        similarity_threshold=SUCCEED_MEMORY_THRESHOLD,
+                    )
+                    counted_success = not similar_to_succeed_memory
+
+                item["counted_jailbreak"] = bool(counted_success)
+                item["similar_to_succeed_memory"] = bool(similar_to_succeed_memory)
+                item["succeed_memory_similarity"] = float(succeed_memory_similarity)
+
+                if counted_success:
+                    self.jailbreak_success = True
+                    # print("Found a jailbreaking prompt:", item)
+                    wandb.log({"jailbreak_found": wandb.Table(columns=["behavior", "prompt", "generation", "query_counter", "agent_name"], data=[[item["behavior"], item["prompt"], item["generation"], self.query_counter, self.agent_name]])})
+                    self.jailbreak_item.update(item)
+                    if DIVERSITY_SEARCH and SucceedPromptMemory.is_enabled():
+                        SucceedPromptMemory.add(prompt)
+                        wandb.log({"succeed_memory_size": len(SucceedPromptMemory.get_all())})
+                    print("Query-per-success:", self.query_counter)
+                elif DIVERSITY_SEARCH:
+                    # Success happened, but it is too similar to existing succeed memory and does not count.
+                    wandb.log({
+                        "succeed_memory_similar_hit": 1,
+                        "succeed_memory_similarity": float(succeed_memory_similarity),
+                    })
             else:
                 # Record the failure so future agents skip this prompt
                 FailedPromptMemory.add(goal, prompt)
                 wandb.log({"failed_memory_size": FailedPromptMemory.size(goal)})
+                item["counted_jailbreak"] = False
+                item["similar_to_succeed_memory"] = False
+                item["succeed_memory_similarity"] = 0.0
 
-            jailbreaks.append(jailbreak)
+            if DIVERSITY_SEARCH:
+                jailbreaks.append(bool(item.get("counted_jailbreak", False)))
+            else:
+                jailbreaks.append(jailbreak)
             logprobs.append(logprob)
         return jailbreaks, logprobs
 
@@ -530,6 +576,25 @@ def search(args):
     file_path = os.path.join(args.save_dir, f"{args.expr_name}.json")
     file_dir = os.path.join(args.save_dir, args.expr_name)
     os.makedirs(file_dir, exist_ok=True)
+
+    def _success_similarity_stats(eval_items):
+        raw_success_count = sum(1 for item in eval_items if item.get("jailbreak"))
+        similar_hit_count = sum(
+            1
+            for item in eval_items
+            if item.get("jailbreak") and item.get("similar_to_succeed_memory", False)
+        )
+        novel_success_count = sum(
+            1 for item in eval_items if item.get("counted_jailbreak", item.get("jailbreak", False))
+        )
+        similarity_hit_rate = (float(similar_hit_count) / float(raw_success_count)) if raw_success_count else 0.0
+        return {
+            "raw_success_count": raw_success_count,
+            "similar_hit_count": similar_hit_count,
+            "novel_success_count": novel_success_count,
+            "similarity_hit_rate": similarity_hit_rate,
+        }
+
     if os.path.exists(file_path):
         with open(file_path, 'r') as json_file:
             archive = json.load(json_file)
@@ -564,30 +629,30 @@ def search(args):
         print(f"============Initial Archive: {solution['name']}=================")
         try:
             print(solution["code"])
-            acc_list, items, self_bleu_score = evaluate_forward_fn(args, solution["code"], defender=args.defender_model, use_history=solution.get('history') if args.use_history else None, agent_name=solution.get('name', 'unknown'))
+            acc_list, items, metrics = evaluate_forward_fn(args, solution["code"], defender=args.defender_model, use_history=solution.get('history') if args.use_history else None, agent_name=solution.get('name', 'unknown'))
         except Exception as e:
             print("During evaluating initial archive:")
             raise e
 
-        self_bleu_4 = self_bleu_score.get('self_bleu_4', 0)
+        self_bleu_4 = metrics.get('self_bleu_4', 0)
         if DIVERSITY_SEARCH:
             succeed_stats = SucceedPromptMemory.diversity_stats()
-            fitness_str = f"succeed-prompt diversity is {succeed_stats['diversity']:.6f}"
+            similarity_stats = _success_similarity_stats(items)
+            fitness_str = f"novel-success-count is {similarity_stats['novel_success_count']}"
         else:
             self_bleu_coef = -1 if not args.diversity_incentive else 0
             fitness_str = bootstrap_confidence_interval(acc_list, self_bleu_coef=self_bleu_coef, self_bleu_score=self_bleu_4)
         solution['fitness'] = fitness_str
         if DIVERSITY_SEARCH:
-            solution['succeed_prompt_memory_diversity'] = succeed_stats['diversity']
-            solution['succeed_prompt_memory_cosine_similarity'] = succeed_stats['mean_pairwise_cosine_similarity']
-            solution['succeed_prompt_memory_cosine_distance'] = succeed_stats['mean_pairwise_cosine_distance']
             # Backward-compatible alias.
             solution['succeed_prompt_memory_self_bleu_4'] = succeed_stats['self_bleu_4']
             solution['succeed_prompt_memory_size'] = succeed_stats['size']
+            solution['novel_success_count'] = similarity_stats['novel_success_count']
             print(f"SucceedPromptMemory (gen initial): size={succeed_stats['size']}, "
                   f"cosine_similarity={succeed_stats['mean_pairwise_cosine_similarity']:.4f}, "
                   f"cosine_distance={succeed_stats['mean_pairwise_cosine_distance']:.4f}, "
-                  f"diversity={succeed_stats['diversity']:.4f}")
+                  f"diversity={succeed_stats['diversity']:.4f}, "
+                  f"similarity_hit_rate={similarity_stats['similarity_hit_rate']:.4f}")
             wandb.log({
                 "SucceedPromptMemory/size": succeed_stats['size'],
                 "SucceedPromptMemory/cosine_similarity": succeed_stats['mean_pairwise_cosine_similarity'],
@@ -595,6 +660,10 @@ def search(args):
                 # Backward-compatible alias.
                 "SucceedPromptMemory/self_bleu_4": succeed_stats['self_bleu_4'],
                 "SucceedPromptMemory/diversity": succeed_stats['diversity'],
+                "SucceedPromptMemory/raw_success_count": similarity_stats['raw_success_count'],
+                "SucceedPromptMemory/similar_hit_count": similarity_stats['similar_hit_count'],
+                "SucceedPromptMemory/novel_success_count": similarity_stats['novel_success_count'],
+                "SucceedPromptMemory/similarity_hit_rate": similarity_stats['similarity_hit_rate'],
                 "SucceedPromptMemory/generation": -1,
             })
         log_json_as_table(items, f"gen_initial_{[solution['name']]}")
@@ -625,6 +694,19 @@ def search(args):
                 # Not in a notebook environment, skip display
                 pass
         return next_solution
+
+    def _candidate_novel_success_stats(candidate_items):
+        successful_prompts = [
+            item.get("prompt", "")
+            for item in candidate_items
+            if item.get("jailbreak")
+        ]
+        novel_success_prompts = [
+            item.get("prompt", "")
+            for item in candidate_items
+            if item.get("counted_jailbreak", item.get("jailbreak", False))
+        ]
+        return successful_prompts, novel_success_prompts
     
     for n in range(start, args.n_generation):
         print(f"============Generation {n + 1}=================")
@@ -664,19 +746,34 @@ def search(args):
                     print("next solution candidate\n", next_solution['code'])
                     prev_succeed_enabled = SucceedPromptMemory.set_enabled(False) if DIVERSITY_SEARCH else True
                     try:
-                        acc_list, items, self_bleu_score = evaluate_forward_fn(args, code, test_pass=True, defender=args.defender_model, agent_name=next_solution.get('name', 'unknown'))
+                        acc_list, items, metrics = evaluate_forward_fn(args, code, test_pass=True, defender=args.defender_model, agent_name=next_solution.get('name', 'unknown'))
                     finally:
                         if DIVERSITY_SEARCH:
                             SucceedPromptMemory.set_enabled(prev_succeed_enabled)
-                    if (not DIVERSITY_SEARCH) and np.mean(acc_list) < 0.01 and SEARCHING_MODE:
+                    if np.mean(acc_list) < 0.01 and SEARCHING_MODE:
                         raise Exception("All 0 accuracy")
                     if DIVERSITY_SEARCH:
-                        candidate_success_prompts = [item.get("prompt", "") for item in items if item.get("jailbreak")]
-                        delta_info = SucceedPromptMemory.delta_diversity_if_added(candidate_success_prompts)
-                        candidate_fitness = delta_info["delta_diversity"]
-                        print(f"Candidate delta diversity: {candidate_fitness:.6f} "
-                              f"(before={delta_info['before_diversity']:.6f}, after={delta_info['after_diversity']:.6f}, "
+                        candidate_success_prompts, candidate_novel_success_prompts = _candidate_novel_success_stats(items)
+                        delta_info = SucceedPromptMemory.delta_diversity_if_added(candidate_novel_success_prompts)
+                        candidate_fitness = SucceedPromptMemory.avg_distance_to_memory(candidate_success_prompts)
+                        print(f"Candidate diversity fitness: {candidate_fitness:.6f} "
+                              f"(avg_emb_dist_to_memory={candidate_fitness:.6f}, "
+                              f"raw_success={len(candidate_success_prompts)}, "
+                              f"novel_success={len(candidate_novel_success_prompts)}, "
+                              f"before_diversity={delta_info['before_diversity']:.6f}, "
+                              f"after_diversity={delta_info['after_diversity']:.6f}, "
+                              f"delta_diversity={delta_info['delta_diversity']:.6f}, "
                               f"added={delta_info['added_count']})")
+                        wandb.log({
+                            "SucceedPromptMemory/candidate_generation": n + 1,
+                            "SucceedPromptMemory/candidate_offspring": kid_idx,
+                            "SucceedPromptMemory/candidate_fitness": candidate_fitness,
+                            "SucceedPromptMemory/candidate_raw_success_count": len(candidate_success_prompts),
+                            "SucceedPromptMemory/candidate_novel_success_count": len(candidate_novel_success_prompts),
+                            "SucceedPromptMemory/candidate_before_diversity": delta_info["before_diversity"],
+                            "SucceedPromptMemory/candidate_after_diversity": delta_info["after_diversity"],
+                            "SucceedPromptMemory/candidate_delta_diversity": delta_info["delta_diversity"],
+                        })
                     else:
                         candidate_fitness = np.mean(acc_list)
                     if candidate_fitness > best_fitness_val:
@@ -696,21 +793,34 @@ def search(args):
                         # test for one pass
                         prev_succeed_enabled = SucceedPromptMemory.set_enabled(False) if DIVERSITY_SEARCH else True
                         try:
-                            acc_list, items, self_bleu_score = evaluate_forward_fn(args, code, test_pass=True, defender=args.defender_model, agent_name=next_solution.get('name', 'unknown'))
+                            acc_list, items, metrics = evaluate_forward_fn(args, code, test_pass=True, defender=args.defender_model, agent_name=next_solution.get('name', 'unknown'))
                         finally:
                             if DIVERSITY_SEARCH:
                                 SucceedPromptMemory.set_enabled(prev_succeed_enabled)
-                        if (not DIVERSITY_SEARCH) and np.mean(acc_list) < 0.01 and SEARCHING_MODE:
+                        if np.mean(acc_list) < 0.01 and SEARCHING_MODE:
                             raise Exception("All 0 accuracy")
-                        if isinstance(self_bleu_score, dict) and self_bleu_score.get('self_bleu_4', 0) >= args.diversity_threshold:
-                            raise Exception(f"Fail diversity threshold with self_bleu_score {self_bleu_score}")
                         if DIVERSITY_SEARCH:
-                            candidate_success_prompts = [item.get("prompt", "") for item in items if item.get("jailbreak")]
-                            delta_info = SucceedPromptMemory.delta_diversity_if_added(candidate_success_prompts)
-                            candidate_fitness = delta_info["delta_diversity"]
-                            print(f"Candidate delta diversity: {candidate_fitness:.6f} "
-                                  f"(before={delta_info['before_diversity']:.6f}, after={delta_info['after_diversity']:.6f}, "
+                            candidate_success_prompts, candidate_novel_success_prompts = _candidate_novel_success_stats(items)
+                            delta_info = SucceedPromptMemory.delta_diversity_if_added(candidate_novel_success_prompts)
+                            candidate_fitness = SucceedPromptMemory.avg_distance_to_memory(candidate_success_prompts)
+                            print(f"Candidate diversity fitness: {candidate_fitness:.6f} "
+                                  f"(avg_emb_dist_to_memory={candidate_fitness:.6f}, "
+                                  f"raw_success={len(candidate_success_prompts)}, "
+                                  f"novel_success={len(candidate_novel_success_prompts)}, "
+                                  f"before_diversity={delta_info['before_diversity']:.6f}, "
+                                  f"after_diversity={delta_info['after_diversity']:.6f}, "
+                                  f"delta_diversity={delta_info['delta_diversity']:.6f}, "
                                   f"added={delta_info['added_count']})")
+                            wandb.log({
+                                "SucceedPromptMemory/candidate_generation": n + 1,
+                                "SucceedPromptMemory/candidate_offspring": kid_idx,
+                                "SucceedPromptMemory/candidate_fitness": candidate_fitness,
+                                "SucceedPromptMemory/candidate_raw_success_count": len(candidate_success_prompts),
+                                "SucceedPromptMemory/candidate_novel_success_count": len(candidate_novel_success_prompts),
+                                "SucceedPromptMemory/candidate_before_diversity": delta_info["before_diversity"],
+                                "SucceedPromptMemory/candidate_after_diversity": delta_info["after_diversity"],
+                                "SucceedPromptMemory/candidate_delta_diversity": delta_info["delta_diversity"],
+                            })
                         else:
                             candidate_fitness = np.mean(acc_list)
                         if candidate_fitness > best_fitness_val:
@@ -731,27 +841,27 @@ def search(args):
         next_solution = best_kid
         next_solution['generation'] = n + 1
         
-        acc_list, items, self_bleu_score = evaluate_forward_fn(args, next_solution['code'], defender=args.defender_model, agent_name=next_solution.get('name', 'unknown'))
-        self_bleu_4 = self_bleu_score.get('self_bleu_4', 0)
+        acc_list, items, metrics = evaluate_forward_fn(args, next_solution['code'], defender=args.defender_model, agent_name=next_solution.get('name', 'unknown'))
+        self_bleu_4 = metrics.get('self_bleu_4', 0)
         if DIVERSITY_SEARCH:
             succeed_stats = SucceedPromptMemory.diversity_stats()
-            fitness_str = f"succeed-prompt diversity is {succeed_stats['diversity']:.6f}"
+            similarity_stats = _success_similarity_stats(items)
+            fitness_str = f"novel-success-count is {similarity_stats['novel_success_count']}"
         else:
             self_bleu_coef = -1 if not args.diversity_incentive else 0
             fitness_str = bootstrap_confidence_interval(acc_list, self_bleu_coef=self_bleu_coef, self_bleu_score=self_bleu_4)
         print("eval_pass", fitness_str)
         next_solution['fitness'] = fitness_str
         if DIVERSITY_SEARCH:
-            next_solution['succeed_prompt_memory_diversity'] = succeed_stats['diversity']
-            next_solution['succeed_prompt_memory_cosine_similarity'] = succeed_stats['mean_pairwise_cosine_similarity']
-            next_solution['succeed_prompt_memory_cosine_distance'] = succeed_stats['mean_pairwise_cosine_distance']
             # Backward-compatible alias.
             next_solution['succeed_prompt_memory_self_bleu_4'] = succeed_stats['self_bleu_4']
             next_solution['succeed_prompt_memory_size'] = succeed_stats['size']
+            next_solution['novel_success_count'] = similarity_stats['novel_success_count']
             print(f"SucceedPromptMemory (gen {n+1}): size={succeed_stats['size']}, "
                   f"cosine_similarity={succeed_stats['mean_pairwise_cosine_similarity']:.4f}, "
                   f"cosine_distance={succeed_stats['mean_pairwise_cosine_distance']:.4f}, "
-                  f"diversity={succeed_stats['diversity']:.4f}")
+                  f"diversity={succeed_stats['diversity']:.4f}, "
+                  f"similarity_hit_rate={similarity_stats['similarity_hit_rate']:.4f}")
             wandb.log({
                 "SucceedPromptMemory/size": succeed_stats['size'],
                 "SucceedPromptMemory/cosine_similarity": succeed_stats['mean_pairwise_cosine_similarity'],
@@ -759,6 +869,10 @@ def search(args):
                 # Backward-compatible alias.
                 "SucceedPromptMemory/self_bleu_4": succeed_stats['self_bleu_4'],
                 "SucceedPromptMemory/diversity": succeed_stats['diversity'],
+                "SucceedPromptMemory/raw_success_count": similarity_stats['raw_success_count'],
+                "SucceedPromptMemory/similar_hit_count": similarity_stats['similar_hit_count'],
+                "SucceedPromptMemory/novel_success_count": similarity_stats['novel_success_count'],
+                "SucceedPromptMemory/similarity_hit_rate": similarity_stats['similarity_hit_rate'],
                 "SucceedPromptMemory/generation": n + 1,
             })
         print(json.dumps(next_solution, indent=4))
@@ -800,7 +914,10 @@ def evaluate(args):
         solution = eval_archive[current_idx]
         print(f"current_gen: {solution['generation']}, current_idx: {current_idx}")
 
-        if solution['generation'] == 'initial': # skip initial gen
+        if args.eval_generation is not None and solution.get('generation') != args.eval_generation:
+            continue
+
+        if solution['generation'] == 'initial' or 'query-per-success' in solution: # skip initial gen
             continue
 
         # Evaluate on different target models
@@ -827,17 +944,17 @@ def evaluate(args):
                 # repeat evaluation for different shuffle seeds
                 for shuffle_seed in range(args.n_repeat):
                     args.shuffle_seed = shuffle_seed
-                    acc_list, items, self_bleu_score = evaluate_forward_fn(args, solution["code"], defender=args.defender_model, use_history=solution.get('history') if args.use_history else None, agent_name=solution.get('name', 'unknown'))
+                    acc_list, items, metrics = evaluate_forward_fn(args, solution["code"], defender=args.defender_model, use_history=solution.get('history') if args.use_history else None, agent_name=solution.get('name', 'unknown'))
                     acc_list_all.extend(acc_list)
             except Exception as e:
                 print("During evaluating initial archive:")
                 raise e
 
-            self_bleu_4 = self_bleu_score.get('self_bleu_4', 0) if args.diversity_incentive else 0
+            self_bleu_4 = metrics.get('self_bleu_4', 0) if args.diversity_incentive else 0
             fitness_str = bootstrap_confidence_interval(acc_list_all, self_bleu_score=self_bleu_4)
             solution[defender_model_name_abbr] = dict()
             solution[defender_model_name_abbr]['fitness'] = fitness_str
-            solution[defender_model_name_abbr]['selfBLEU'] = self_bleu_4
+            solution[defender_model_name_abbr].update(metrics)
             eval_archive[current_idx] = solution
             with open(eval_file_path, 'w') as f:
                 json.dump(eval_archive, f)
@@ -851,11 +968,7 @@ from typing import Dict, List, Tuple
 
 
 def redteam_metric(batch_inputs: List[List[Dict]], max_workers: int, defender: str = None,
-                   agent_systems: List["AgentSystem"] = None) -> Tuple[float, float]:
-    
-    fitness_str = f"Attack success rate is {np.mean([agentSystem.jailbreak_success for agentSystem in agent_systems])}, \
-        query per success is {np.mean([agentSystem.query_counter for agentSystem in agent_systems if agentSystem.jailbreak_success])}"
-    print(fitness_str)
+                   agent_systems: List["AgentSystem"] = None) -> Tuple[List[Dict], List[bool], Dict]:
     
     items = []
     prompts = [batch_inputs[i][-2]['content'] for i in range(len(batch_inputs))]
@@ -864,9 +977,21 @@ def redteam_metric(batch_inputs: List[List[Dict]], max_workers: int, defender: s
     print(f"Evaluating on target model {defender}")
     max_workers = min(max_workers, len(batch_inputs))
 
-    self_bleu_score = calculate_self_bleu(prompts)
-    for metric, score in self_bleu_score.items():
+    self_bleu_metrics = calculate_self_bleu(prompts)
+    for metric, score in self_bleu_metrics.items():
         print(f"{metric}: {score:.4f}")
+
+    query_per_success = None
+    if agent_systems is not None and len(agent_systems) > 0:
+        agent_successes = [agent.jailbreak_success for agent in agent_systems]
+        success_agents = [agent for agent in agent_systems if agent.jailbreak_success]
+        asr_from_agents = float(np.mean(agent_successes)) if len(agent_successes) > 0 else 0.0
+        query_per_success = (
+            float(np.mean([agent.query_counter for agent in success_agents]))
+            if len(success_agents) > 0
+            else None
+        )
+        print(f"Attack success rate is {asr_from_agents}, query per success is {query_per_success}")
 
     # If forward() already computed jailbreak state, reuse it directly.
     if agent_systems is not None and len(agent_systems) == len(batch_inputs):
@@ -943,13 +1068,32 @@ def redteam_metric(batch_inputs: List[List[Dict]], max_workers: int, defender: s
         args_list=items,
         max_workers=max_workers
     )
-    
+
+    # gptfuzzer_results = run_in_threads(
+    #     func=lambda item: classify(client, item, benchmark='gptfuzzer')[0],
+    #     args_list=items,
+    #     max_workers=max_workers
+    # )
+
     assert len(jailbreak_results) == len(items)
     print("redteam_metric")
     acc_list = jailbreak_results
     [item.update({"jailbreak": jailbreak_results[i]}) for i, item in enumerate(items)]
     [item.update({"strongreject": strongreject_results[i]}) for i, item in enumerate(items)]
-    return items, acc_list, self_bleu_score
+    #[item.update({"gptfuzzer": gptfuzzer_results[i]}) for i, item in enumerate(items)]
+    asr = float(np.mean(jailbreak_results)) if len(jailbreak_results) > 0 else 0.0
+    strongreject_rate = float(np.mean(strongreject_results)) if len(strongreject_results) > 0 else 0.0
+    print(f"Attack success rate is {asr}, strong reject rate is {strongreject_rate}, query per success is {query_per_success}")
+
+    metrics = {
+        "asr": asr,
+        "query_per_success": query_per_success,
+        "strongreject_rate": strongreject_rate,
+        "num_samples": len(items),
+        "num_successes": int(sum(bool(x) for x in jailbreak_results)),
+    }
+    metrics.update(self_bleu_metrics)
+    return items, acc_list, metrics
 
 
 
@@ -1008,6 +1152,9 @@ def evaluate_forward_fn(args, forward_str, test_pass=False, defender=None, use_h
             examples = goals
         elif args.benchmark.lower() == 'teleai_safety':
             goals, goals_id, targets = load_teleai_safety_dataset()
+            examples = goals
+        elif args.benchmark.lower() == 'clearharm':
+            goals, goals_id, targets = load_clearharm_dataset()
             examples = goals
         else:
             raise ValueError(f"Benchmark {args.benchmark} is not supported")
@@ -1096,12 +1243,12 @@ def evaluate_forward_fn(args, forward_str, test_pass=False, defender=None, use_h
             batch_query.append(query)
         assert len(batch_query) == len(task_queue)
     
-    items, acc_list, self_bleu_score = redteam_metric(
+    items, acc_list, metrics = redteam_metric(
         batch_inputs=batch_query,
         max_workers=max_workers,
         agent_systems=agentSystems
     )
-    return acc_list, items, self_bleu_score
+    return acc_list, items, metrics
 
 
 def main(argv):
@@ -1132,9 +1279,8 @@ def main(argv):
     defender_client, defender_model_name, defender_model_name_abbr = setup_defender_runtime(
         args.defender_model,
         use_openrouter=args.use_openrouter,
-        keep_declared_name=False,
+        keep_declared_name=False if args.defender_model.startswith('http://') else True,
     )
-
     # Configure and load failed-prompt memory persisted per target model.
     load_failed_prompt_memory_for_model(args.save_dir, defender_model_name, defender_model_name_abbr)
 

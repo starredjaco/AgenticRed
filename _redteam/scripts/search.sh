@@ -11,11 +11,16 @@ set -euo pipefail
 export HF_HOME=/SWS/llms/nobackup/
 
 # Set model endpoints
-# LLAMA2_ENDPOINT='http://sws-2a100-02:8001/v1'
-LLAMA2_ENDPOINT='http://sws-2l40-03:8000/v1'
+LLAMA2_ENDPOINT='http://sws-2a100-02:8001/v1'
+#LLAMA2_ENDPOINT='http://sws-2l40-03:8000/v1'
 LLAMA3_ENDPOINT='http://sws-2l40-03:8002/v1'
-QWEN3_8B_ENDPOINT='http://sws-2l40-03:8001/v1'
-ATTACKER_ENDPOINT="http://sws-2a100-06:8090/v1,http://sws-2a100-06:8091/v1,http://sws-2a40-01:8090/v1,http://sws-2a40-01:8091/v1,http://sws-2a40-03:8090/v1,http://sws-2a40-03:8091/v1"
+QWEN3_8B_ENDPOINT="Qwen/Qwen3-8B"
+
+QWEN3_8B_ENDPOINT_2="http://sws-2l40-03:8001/v1,http://sws-2a40-03:8000/v1,http://sws-2a40-03:8001/v1"
+
+ATTACKER_ENDPOINT="http://sws-2a100-06:8090/v1,http://sws-2a100-06:8091/v1,http://sws-2a40-01:8090/v1,http://sws-2a40-01:8091/v1"
+ATTACKER_ENDPOINT=$QWEN3_8B_ENDPOINT_2
+
 VICUNA_ENDPOINTS=''
 CLASSIFIER_ENDPOINT='http://sws-2l40-04:8080/v1'
 MODE='search'
@@ -23,7 +28,7 @@ SEED=6
 
 
 # Parse --expr and --seed as named arguments
-INDEX=1
+INDEX=9
 
 while [[ $# -gt 0 ]]; do
     key="$1"

@@ -6,12 +6,16 @@
 #SBATCH -o slurm/hostname_%j.out
 #SBATCH -e slurm/hostname_%j.err
 
+LLAMA2_ENDPOINT='http://sws-2a100-02:8001/v1'
+#LLAMA2_ENDPOINT='http://sws-2l40-03:8000/v1'
+LLAMA3_ENDPOINT='http://sws-2l40-03:8002/v1'
+QWEN3_8B_ENDPOINT="Qwen/Qwen3-8B"
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REDTEAM_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-CONFIG_PATH="./configs/eval_easyjailbreak.yaml"
+CONFIG_PATH="./configs/eval_targets_mix.yaml"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
